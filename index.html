@@ -197,6 +197,7 @@
   <script>
     function generateRandomDigits(n) { let s = ''; for (let i = 0; i < n; i++) s += Math.floor(Math.random() * 10); return s; }
     function buildParticipantID(id) { const d = new Date().getDate(); return `${id}@${d * 25 + generateRandomDigits(4)}`; }
+    const ADMIN_BYPASS_CODE = 'admin';   // worker ID value that enables admin bypass
   </script>
 </head>
 
@@ -247,7 +248,7 @@
 
     var objectNames = [
       //"Book Shelves", "Chess", 
-      "Wheel",//"Food Platter", "Fruits", "Humming Bird","Plant","Swing", "Vase", "Wood","BronzeCat","Remote",
+      "Wheel",//"Food Platter","Fruits", "Humming Bird","Plant","Swing", "Vase", "Wood","BronzeCat","Remote",
     ];
     var groups = {
       // "Group1": ["Center_100%_Plain"],
@@ -258,7 +259,7 @@
       // "Group6": ["Down_100%_Plain"],
       // "Group7": ["Center_125%_Plain"],
       // "Group8": ["Center_75%_Plain"],
-       "Group9": ["Center_100%_PatternHoriz"],
+      "Group9": ["Center_100%_PatternHoriz"],
       // "Group10": ["Center_100%_PatternVert"],
       // "Group11": ["Center_100%_Messy"],
     };
@@ -348,6 +349,8 @@
 
         btn.addEventListener("click", () => {
           const workerId = idInput.value.trim();
+          const isAdminBypass = workerId.toLowerCase() === ADMIN_BYPASS_CODE;
+          window.adminBypass = isAdminBypass;
           window.participantID = buildParticipantID(workerId);
         });
       },
@@ -596,6 +599,11 @@
 
       /* ------------------------------------------------------------------------ */
       on_load: () => {
+        if (window.adminBypass) {
+          jsPsych.finishTrial({ clicked: 1, response: 1, adminBypass: true });
+          return;
+        }
+
         installZoomBlocker();
         /* re-eval pass/fail for logic here */
         const dpr = window.devicePixelRatio || 1,
@@ -680,6 +688,11 @@
       /* ------------------------------------------------------------------------ */
       /* ---------------- on-finish handler ---------------- */
       on_finish: data => {
+        if (window.adminBypass) {
+          data.clicked = 1;
+          return;
+        }
+
         // always stop blocking zoom shortcuts
         removeZoomBlocker();
 
@@ -738,6 +751,11 @@
       },
       choices: ['Re-check', 'Continue'],
       on_load: function () {
+        if (window.adminBypass) {
+          jsPsych.finishTrial({ zoom: 100, response: 1, adminBypass: true });
+          return;
+        }
+
         const pct = zoomPct(), ok = pct >= 95 && pct <= 105, btns = document.querySelectorAll('.jspsych-btn');
         if (ok) {
           btns[0].style.display = 'none'; btns[1].style.display = 'none';
@@ -745,7 +763,7 @@
         }
         else { btns[1].disabled = true; btns[1].style.opacity = '.4'; }
       },
-      on_finish: data => data.zoom = zoomPct()
+      on_finish: data => data.zoom = window.adminBypass ? 100 : zoomPct()
     };
 
     var zoomCheckLoop = {
@@ -761,13 +779,14 @@
     /* create once */
     let guardStarted = false;
 
-    function startZoomGuard() {
-      if (guardStarted) return;
-      guardStarted = true;
+      function startZoomGuard() {
+        if (guardStarted) return;
+        guardStarted = true;
 
-      /* ── helper: are both zoom & resolution within limits? ── */
-      function ok() {
-        const dpr = window.devicePixelRatio || 1;
+        /* ── helper: are both zoom & resolution within limits? ── */
+        function ok() {
+          if (window.adminBypass) return true;
+          const dpr = window.devicePixelRatio || 1;
 
         /* browser zoom   (≈100 % ±5 %) */
         const zoomPct = (dpr / 1.25) * 100;
@@ -925,7 +944,7 @@
       choices: ['Continue'],
       on_load: function () {
         const btn = document.querySelector('.jspsych-btn');
-        btn.disabled = true;
+        btn.disabled = false;
 
         const video = document.getElementById('demo-video');
         let playStart = null;
@@ -1184,19 +1203,20 @@
         window.selectedGroupKey = getRandomElement(Object.keys(groups));
         var props = groups[window.selectedGroupKey];
         var setsCount = props.length;
+        var dirsPerScale = 2; // one horizontal + one vertical per size
         return `
           <div style="text-align:center;">
             <h2>Actual Experiment:</h2>
             <p>The experiment will now run for a series of keys based on one randomly selected object and group.</p>
             <p>
               You have been assigned to <strong>${window.selectedGroupKey}</strong>.<br>
-              You will perform <strong>${setsCount * 4 * SCALES.length} sets</strong> (each property contributes 4 directions) of experiments.
+              You will perform <strong>${setsCount * dirsPerScale * SCALES.length} sets</strong> (each property contributes 2 directions per size: one horizontal and one vertical chosen at random) of experiments.
             </p>
             <p style="color:red; font-weight:bold;">
               WARNING: Refreshing the page will cause all progress to be lost.
             </p>
             <p>
-              In each set, the same salient object will be used. The object will shift in 4 directions – Left, Right, Up, and Down.
+              In each set, the same salient object will be used. For every size, the object will shift in two directions: one of Left/Right and one of Up/Down, chosen at random for that size.
               After each directional shift, please press <strong>YES</strong> once you observe a difference.
             </p>
             <p>
@@ -1239,7 +1259,8 @@
 
         /* ========== progress ring ========== */
         const properties = groups[window.selectedGroupKey];     // e.g. ["Center_125%_Plain"]
-        const totalSets = properties.length * 4 * SCALES.length;
+        const DIRECTIONS_PER_SCALE = 2;                         // 1 horizontal + 1 vertical per scale
+        const totalSets = properties.length * DIRECTIONS_PER_SCALE * SCALES.length;
         document.getElementById('progress-circle').style.display = 'block';
         window.completedSets = 0;
         window.updateProgressCircle = () => {
@@ -1294,6 +1315,11 @@
              Inner body: all properties for *one* scale
           =============================================== */
           function runScaleBody(currentScale) {
+            // Randomly pick one horizontal and one vertical direction for this scale
+            const chosenDirs = {
+              horizontal: Math.random() < 0.5 ? 'L' : 'R',
+              vertical: Math.random() < 0.5 ? 'U' : 'D',
+            };
 
             function runExperimentForProperty(propIdx) {
               if (propIdx >= properties.length) {
@@ -1308,6 +1334,7 @@
                 searchKey,
                 property,
                 currentScale,
+                chosenDirs,
                 (phaseResults, filenames) => {
 
                   /* one-time stimulus-size capture for this scale */
@@ -1347,10 +1374,10 @@
     };
 
     /******************************************************************
-     * 3) Directional experiment (one property, four directions)
-     *    – unchanged logic, but now receives `scaleFactor`
+     * 3) Directional experiment (one property, two directions per scale)
+     *    – now receives `scaleFactor` and chosenDirs (H + V)
      *****************************************************************/
-    function runDirectionalExperiment(searchKey, propertyName, scaleFactor, callback) {
+    function runDirectionalExperiment(searchKey, propertyName, scaleFactor, chosenDirs, callback) {
       const btn = document.querySelector('#yes-button-container .jspsych-btn')
         || document.querySelector('.jspsych-btn');
       const container = document.getElementById('actual-exp-container');
@@ -1387,17 +1414,20 @@
         const up = fileNames.slice(201, 301);
         const down = fileNames.slice(301, 401);
 
-        const phases = [
-          { label: 'LEFT', dir: 'L', filenames: [original, ...left] },
-          { label: 'RIGHT', dir: 'R', filenames: [original, ...right] },
-          { label: 'UP', dir: 'U', filenames: [original, ...up] },
-          { label: 'DOWN', dir: 'D', filenames: [original, ...down] }
-        ];
+        const phases = [];
+        const horizLabel = chosenDirs.horizontal === 'L' ? 'LEFT' : 'RIGHT';
+        const horizFiles = chosenDirs.horizontal === 'L' ? left : right;
+        phases.push({ label: horizLabel, dir: chosenDirs.horizontal, filenames: [original, ...horizFiles] });
+
+        const vertLabel = chosenDirs.vertical === 'U' ? 'UP' : 'DOWN';
+        const vertFiles = chosenDirs.vertical === 'U' ? up : down;
+        phases.push({ label: vertLabel, dir: chosenDirs.vertical, filenames: [original, ...vertFiles] });
 
         const baseURL = 'https://lasvientuexperimentdata.s3.ap-southeast-1.amazonaws.com/Rendered+Images/';
-        const INITIAL_CACHE = 5;
+        const INITIAL_CACHE = 6;
         const PREFETCH_BORDER = 2;
         const PREFETCH_CHUNK = 2;
+        const ACTUAL_PIXEL_STEP = 2;   /* shift step per frame for actual run */
 
         let phaseIdx = 0;
         let imgIdx = 0;
@@ -1544,7 +1574,7 @@
             shiftImg.style.visibility = 'hidden';
 
             pauseAwareTimeout(() => {
-              imgIdx++;
+              imgIdx = Math.min(imgIdx + ACTUAL_PIXEL_STEP, phase.filenames.length - 1);
 
               /* prefetch just-in-time */
               if (imgIdx + PREFETCH_BORDER > highestCached &&
